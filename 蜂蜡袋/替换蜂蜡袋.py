@@ -96,93 +96,31 @@ def find_single_image(folder_path):
     
     image_files = []
     for ext in image_extensions:
-        image_files.extend(folder_path.glob(f"*{ext}"))
+        found_files = list(folder_path.glob(f"*{ext}"))
+        image_files.extend(found_files)
     
-    # 检查是否恰好有一个图片文件
-    if len(image_files) == 0:
+    # 去重：Windows文件系统不区分大小写，可能会找到重复文件
+    unique_files = {}
+    for file_path in image_files:
+        key = file_path.name.lower()
+        if key not in unique_files:
+            unique_files[key] = file_path
+    
+    unique_image_files = list(unique_files.values())
+    
+    # 检查是否有可用的图片文件（去重后）
+    if len(unique_image_files) == 0:
         return None, "未找到图片文件"
-    elif len(image_files) > 1:
-        return None, f"找到多个图片文件：{', '.join([f.name for f in image_files])}"
+    elif len(unique_image_files) > 1:
+        print(f"  ⚠️  找到多个图片文件，将使用：{unique_image_files[0].name}")
+        return unique_image_files[0], None
     else:
-        return image_files[0], None
+        return unique_image_files[0], None
 
 def has_existing_pptx(folder_path):
     """检查文件夹中是否已有PPTX文件"""
     pptx_files = list(folder_path.glob("*.pptx"))
     return len(pptx_files) > 0, pptx_files
-
-def create_sized_images_from_source(source_image_path, dpi=96):
-    """从源图片创建多种尺寸版本（内存中处理，不保存到磁盘）"""
-    cm_to_pixel = lambda cm: int(cm * dpi / 2.54)
-    
-    try:
-        with Image.open(source_image_path) as original_image:
-            print(f"  📐 源图片尺寸：{original_image.size[0]}x{original_image.size[1]}像素")
-            
-            # 计算所有需要的最大尺寸
-            required_widths = [cm_to_pixel(w) for _, (w, h) in GENERATED_SIZES.items()]
-            required_heights = [cm_to_pixel(h) for _, (w, h) in GENERATED_SIZES.items()]
-            min_width_needed = max(required_widths)
-            min_height_needed = max(required_heights)
-            
-            current_width, current_height = original_image.size
-            
-            # 检查是否需要放大图片
-            if current_width < min_width_needed or current_height < min_height_needed:
-                # 计算需要的缩放比例（保持宽高比）
-                scale_x = min_width_needed / current_width
-                scale_y = min_height_needed / current_height
-                scale_factor = max(scale_x, scale_y)
-                
-                new_width = int(current_width * scale_factor)
-                new_height = int(current_height * scale_factor)
-                
-                print(f"  🔍 图片太小，正在放大...")
-                print(f"  📏 需要最小尺寸：{min_width_needed}x{min_height_needed}像素")
-                print(f"  ⬆️  放大到：{new_width}x{new_height}像素（缩放{scale_factor:.2f}倍）")
-                
-                # 使用高质量重采样放大图片
-                image = original_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
-            else:
-                print(f"  ✅ 图片尺寸足够大")
-                image = original_image.copy()
-            
-            width, height = image.size
-            center_x, center_y = width // 2, height // 2
-            
-            # 创建临时文件夹存储处理后的图片
-            temp_dir = Path(tempfile.mkdtemp())
-            created_files = {}
-            
-            for size_name, (width_cm, height_cm) in GENERATED_SIZES.items():
-                crop_width = cm_to_pixel(width_cm)
-                crop_height = cm_to_pixel(height_cm)
-                
-                # 现在图片应该足够大了，但还是检查一下
-                if crop_width > width or crop_height > height:
-                    print(f"  ⚠️  意外错误：即使放大后，{size_name}仍然过大，跳过")
-                    continue
-                
-                # 从中心计算裁剪区域
-                left = center_x - crop_width // 2
-                top = center_y - crop_height // 2
-                right = left + crop_width
-                bottom = top + crop_height
-                
-                # 裁剪图片
-                cropped_image = image.crop((left, top, right, bottom))
-                
-                # 保存到临时文件
-                temp_file_path = temp_dir / f"{size_name}.png"
-                cropped_image.save(temp_file_path)
-                created_files[size_name] = temp_file_path
-                print(f"  ✅ 已创建{size_name}：{width_cm}x{height_cm}厘米")
-            
-            return created_files, temp_dir
-            
-    except Exception as e:
-        print(f"  ❌ 从源图片创建尺寸版本时出错：{e}")
-        return None, None
 
 def copy_template_pptx(template_path, output_dir, folder_name):
     """创建模板PPTX的副本用于处理"""
@@ -204,22 +142,14 @@ def copy_template_pptx(template_path, output_dir, folder_name):
         print(f"  ❌ 复制模板失败：{e}")
         return None
 
-def replace_images_in_presentation(pptx_path, sized_images):
-    """替换PowerPoint演示文稿中的图片"""
+def replace_images_in_presentation(pptx_path, sized_images, original_image_name):
+    """替换PowerPoint演示文稿中的图片和文本"""
     try:
         prs = Presentation(pptx_path)
         replacements_made = 0
-        
-        # 创建尺寸名称到形状名称列表的映射
-        print(f"  🔍 准备替换以下图片映射：")
-        for size_name, img_path in sized_images.items():
-            if size_name in IMAGE_SHAPE_MAPPING:
-                shape_names = IMAGE_SHAPE_MAPPING[size_name]
-                print(f"    {size_name} → {', '.join(shape_names)}")
+        text_replacements_made = 0
         
         for slide_idx, slide in enumerate(prs.slides):
-            print(f"  📄 正在处理幻灯片 {slide_idx + 1}")
-            
             for size_name, img_path in sized_images.items():
                 if size_name not in IMAGE_SHAPE_MAPPING:
                     continue
@@ -236,18 +166,16 @@ def replace_images_in_presentation(pptx_path, sized_images):
                     # 按名称查找形状
                     for shape in slide.shapes:
                         if hasattr(shape, 'name') and shape.name == shape_name and shape.shape_type == 13:  # 13表示图片类型
-                            print(f"    🔄 正在替换形状'{shape_name}'为{size_name}")
-                            
                             # 保存原始位置、大小和索引
                             left = shape.left
                             top = shape.top
                             width = shape.width
                             height = shape.height
-                            shape_index = slide.shapes.index(shape)  # 获取形状的索引
+                            shape_index = slide.shapes.index(shape)
                             
                             # 移除原始形状
-                            sp = shape._element  # 获取形状的XML元素
-                            sp.getparent().remove(sp)  # 从幻灯片中移除形状
+                            sp = shape._element
+                            sp.getparent().remove(sp)
                             
                             # 添加新图片并保持原始位置和大小
                             new_pic = slide.shapes.add_picture(str(img_path), left, top, width, height)
@@ -258,53 +186,122 @@ def replace_images_in_presentation(pptx_path, sized_images):
                             new_pic.width = width
                             new_pic.height = height
                             
-                            # 正确处理XML元素顺序以防止损坏
+                            # 正确处理XML元素顺序
                             new_pic_element = new_pic._element
-                            slide.shapes._spTree.remove(new_pic_element)  # 从当前位置移除
+                            slide.shapes._spTree.remove(new_pic_element)
                             
                             # 确保插入索引不会破坏spTree结构
-                            # spTree的前两个元素必须是组属性 (nvGrpSpPr 和 grpSpPr)
-                            # 所以实际的形状插入索引需要加2
                             spTree = slide.shapes._spTree
                             group_props_count = 0
                             
-                            # 计算组属性元素的数量（通常是2个）
                             for child in spTree:
                                 if child.tag.endswith('}nvGrpSpPr') or child.tag.endswith('}grpSpPr'):
                                     group_props_count += 1
                                 else:
-                                    break  # 组属性应该在开头，一旦遇到其他元素就停止
+                                    break
                             
-                            # 计算正确的插入位置（组属性之后）
                             correct_insert_index = max(group_props_count, shape_index + group_props_count)
                             
-                            # 确保不超出范围
                             if correct_insert_index > len(spTree):
                                 spTree.append(new_pic_element)
                             else:
                                 spTree.insert(correct_insert_index, new_pic_element)
                             
-                            print(f"    ✅ 成功替换'{shape_name}'（已保持正确的XML结构和层级）")
                             replacements_made += 1
                             break
         
+        # 处理文本替换（如果存在源图片名称）
+        if original_image_name:
+            # 定义要替换的文本框名称列表
+            text_boxes_to_replace = ['TextBox 1']
+            source_image_name = original_image_name  # 使用从源图片获取的名称
+            
+            for slide_idx, slide in enumerate(prs.slides):
+                # 查找并替换所有指定的文本框
+                for text_box_name in text_boxes_to_replace:
+                    for shape in slide.shapes:
+                        if hasattr(shape, 'name') and shape.name == text_box_name:
+                            # 检查是否是文本框
+                            if hasattr(shape, 'text_frame') and shape.text_frame:
+                                print(f"    📝 正在替换文本框'{text_box_name}'为'{source_image_name}'")
+                            
+                            # 保存原始格式并替换文本
+                            text_frame = shape.text_frame
+                            
+                            # 如果文本框有内容，保持第一段的格式
+                            if text_frame.paragraphs:
+                                # 获取第一段
+                                first_paragraph = text_frame.paragraphs[0]
+                                
+                                # 保存原始段落格式
+                                original_alignment = first_paragraph.alignment if hasattr(first_paragraph, 'alignment') else None
+                                
+                                # 如果第一段有运行（runs），保存第一个运行的格式
+                                original_font = None
+                                if first_paragraph.runs:
+                                    first_run = first_paragraph.runs[0]
+                                    original_font = {
+                                        'name': first_run.font.name,
+                                        'size': first_run.font.size,
+                                        'bold': first_run.font.bold,
+                                        'italic': first_run.font.italic,
+                                        'color': first_run.font.color.rgb if hasattr(first_run.font.color, 'rgb') else None
+                                    }
+                                
+                                # 清除现有内容
+                                text_frame.clear()
+                                
+                                # 添加新段落
+                                new_paragraph = text_frame.paragraphs[0]
+                                
+                                # 恢复段落格式
+                                if original_alignment is not None:
+                                    new_paragraph.alignment = original_alignment
+                                
+                                # 添加新文本运行
+                                new_run = new_paragraph.add_run()
+                                new_run.text = source_image_name
+                                
+                                # 恢复字体格式
+                                if original_font:
+                                    if original_font['name']:
+                                        new_run.font.name = original_font['name']
+                                    if original_font['size']:
+                                        new_run.font.size = original_font['size']
+                                    if original_font['bold'] is not None:
+                                        new_run.font.bold = original_font['bold']
+                                    if original_font['italic'] is not None:
+                                        new_run.font.italic = original_font['italic']
+                                    if original_font['color']:
+                                        new_run.font.color.rgb = original_font['color']
+                                
+                                text_replacements_made += 1
+                                print(f"    ✅ 成功更新文本框'{text_box_name}'（已保持格式）")
+                                break
+                            elif hasattr(shape, 'text'):
+                                print(f"    📝 正在替换文本形状'{text_box_name}'为'{source_image_name}'")
+                                shape.text = source_image_name
+                                text_replacements_made += 1
+                                print(f"    ✅ 成功更新文本形状'{text_box_name}'")
+                                break
+        
         # 保存演示文稿
         prs.save(pptx_path)
-        print(f"  💾 已保存演示文稿，共替换{replacements_made}个图片")
-        return replacements_made > 0
+        print(f"  💾 已保存演示文稿，共替换{replacements_made}个图片，{text_replacements_made}个文本")
+        return (replacements_made > 0) or (text_replacements_made > 0)
         
     except Exception as e:
         print(f"  ❌ 更新演示文稿时出错：{e}")
         return False
 
-def cleanup_temp_files(temp_dir):
-    """清理临时文件"""
-    try:
-        if temp_dir and temp_dir.exists():
-            shutil.rmtree(temp_dir)
-            print(f"  🧹 已清理临时文件")
-    except Exception as e:
-        print(f"  ⚠️  清理临时文件时出现警告：{e}")
+# def cleanup_temp_files(temp_dir):
+#     """清理临时文件"""
+#     try:
+#         if temp_dir and temp_dir.exists():
+#             shutil.rmtree(temp_dir)
+#             print(f"  🧹 已清理临时文件")
+#     except Exception as e:
+#         print(f"  ⚠️  清理临时文件时出现警告：{e}")
 
 def process_folder(folder_path, template_pptx):
     """处理包含单个图片文件的文件夹"""
@@ -313,8 +310,8 @@ def process_folder(folder_path, template_pptx):
     # 检查是否已经存在PPTX文件（跳过已处理的文件夹）
     has_pptx, existing_pptx = has_existing_pptx(folder_path)
     if has_pptx:
-        print(f"  ⏭️  跳过 - 文件夹中已存在PPTX文件：{', '.join([f.name for f in existing_pptx])}")
-        return True  # 返回True因为这被认为是"成功处理"（已经处理过）
+        print(f"  ⏭️  跳过 - 文件夹中已存在PPTX文件")
+        return True
     
     # 查找单个图片文件
     image_file, error_msg = find_single_image(folder_path)
@@ -328,39 +325,36 @@ def process_folder(folder_path, template_pptx):
     
     # 从源图片创建3个尺寸的版本
     print("  🔧 正在生成不同尺寸的图片...")
-    sized_images, temp_dir = create_sized_images_from_source(image_file)
+    sized_images, original_image_name = create_sized_images_from_source(image_file)
     
     if sized_images is None:
-        print(f"  ❌ 无法生成尺寸图片")
+        print(f"  ❌ 无法为 {image_file.name} 创建尺寸版本")
         return False
+            
+    # 存储原始图片名称，用于后续文本替换
+    if original_image_name:
+        print(f"  📝 原始图片名称：{original_image_name}")
     
-    try:
-        # 显示每个尺寸将替换的形状
-        for size_name, img_path in sized_images.items():
-            if size_name in IMAGE_SHAPE_MAPPING:
-                shapes = IMAGE_SHAPE_MAPPING[size_name]
-                print(f"  📷 {size_name} → {', '.join(shapes)}")
-        
-        # 创建演示文稿副本并替换图片
-        print("  🔧 正在更新演示文稿...")
-        pptx_copy = copy_template_pptx(template_pptx, folder_path, folder_path.name)
-        
-        if pptx_copy:
-            success = replace_images_in_presentation(pptx_copy, sized_images)
-            if success:
-                print(f"  🎉 成功处理文件夹：{folder_path.name}")
-                print(f"  📊 生成的尺寸数量：{len(sized_images)}")
-                return True
-            else:
-                print(f"  ⚠️  在{folder_path.name}中未进行图片替换")
-                print("  💡 请确保PowerPoint形状名称匹配预设映射")
-                return False
-        
-        return False
     
-    finally:
-        # 清理临时文件
-        cleanup_temp_files(temp_dir)
+    # 创建演示文稿副本并替换图片
+    print("  📝 正在创建演示文稿副本...")
+    pptx_copy = copy_template_pptx(template_pptx, folder_path, folder_path.name)
+    
+    if pptx_copy:
+        success = replace_images_in_presentation(pptx_copy, sized_images, original_image_name)
+        if success:
+            print(f"  🎉 成功处理文件夹：{folder_path.name}")
+            return True
+        else:
+            print(f"  ⚠️  在{folder_path.name}中未进行图片替换")
+            print("  💡 请确保PowerPoint形状名称匹配预设映射")
+            return False
+    
+    return False
+    
+    # finally:
+    #     # 清理临时文件
+    #     cleanup_temp_files(temp_dir)
 
 def main():
     """主函数，协调整个处理过程"""

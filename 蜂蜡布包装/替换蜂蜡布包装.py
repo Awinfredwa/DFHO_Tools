@@ -101,8 +101,8 @@ def find_single_image(folder_path):
     # 检查是否恰好有一个图片文件
     if len(image_files) == 0:
         return None, "未找到图片文件"
-    elif len(image_files) > 1:
-        return None, f"找到多个图片文件：{', '.join([f.name for f in image_files])}"
+    # elif len(image_files) > 1:
+    #     return None, f"找到多个图片文件：{', '.join([f.name for f in image_files])}"
     else:
         return image_files[0], None
 
@@ -112,10 +112,18 @@ def has_existing_pptx(folder_path):
     return len(pptx_files) > 0, pptx_files
 
 def create_sized_images_from_source(source_image_path, dpi=96):
-    """从源图片创建多种尺寸版本（内存中处理，不保存到磁盘）"""
+    """
+    从源图片创建多种尺寸版本（内存中处理，不保存到磁盘）
+    
+    返回:
+        tuple: (sized_images, original_image_name) 包含生成的图片字典和原始图片名称（不带扩展名）
+    """
     cm_to_pixel = lambda cm: int(cm * dpi / 2.54)
     
     try:
+        # 提取原始图片名称（不带扩展名）
+        original_image_name = source_image_path.stem
+        
         with Image.open(source_image_path) as original_image:
             print(f"  📐 源图片尺寸：{original_image.size[0]}x{original_image.size[1]}像素")
             
@@ -178,11 +186,11 @@ def create_sized_images_from_source(source_image_path, dpi=96):
                 created_files[size_name] = temp_file_path
                 print(f"  ✅ 已创建{size_name}：{width_cm}x{height_cm}厘米")
             
-            return created_files, temp_dir
+            return created_files, (temp_dir, original_image_name)
             
     except Exception as e:
         print(f"  ❌ 从源图片创建尺寸版本时出错：{e}")
-        return None, None
+        return None, (None, None)
 
 def copy_template_pptx(template_path, output_dir, folder_name):
     """创建模板PPTX的副本用于处理"""
@@ -204,11 +212,19 @@ def copy_template_pptx(template_path, output_dir, folder_name):
         print(f"  ❌ 复制模板失败：{e}")
         return None
 
-def replace_images_in_presentation(pptx_path, sized_images):
-    """替换PowerPoint演示文稿中的图片"""
+def replace_images_in_presentation(pptx_path, sized_images, original_image_name):
+    """
+    替换PowerPoint演示文稿中的图片和文本
+    
+    参数:
+        pptx_path: PowerPoint文件路径
+        sized_images: 包含不同尺寸图片的字典
+        original_image_name: 原始图片名称（不带扩展名）
+    """
     try:
         prs = Presentation(pptx_path)
         replacements_made = 0
+        text_replacements_made = 0
         
         # 创建尺寸名称到形状名称列表的映射
         print(f"  🔍 准备替换以下图片映射：")
@@ -288,10 +304,84 @@ def replace_images_in_presentation(pptx_path, sized_images):
                             replacements_made += 1
                             break
         
+        # 处理文本替换（如果存在源图片名称）
+        if original_image_name:
+            # 定义要替换的文本框名称列表
+            text_boxes_to_replace = ['TextBox 1', 'TextBox 3', 'TextBox 5']
+            
+            for slide_idx, slide in enumerate(prs.slides):
+                # 查找并替换所有指定的文本框
+                for text_box_name in text_boxes_to_replace:
+                    for shape in slide.shapes:
+                        if hasattr(shape, 'name') and shape.name == text_box_name:
+                            # 检查是否是文本框
+                            if hasattr(shape, 'text_frame') and shape.text_frame:
+                                print(f"    📝 正在替换文本框'{text_box_name}'为'{original_image_name}'")
+                                
+                                # 保存原始格式并替换文本
+                                text_frame = shape.text_frame
+                                
+                                # 如果文本框有内容，保持第一段的格式
+                                if text_frame.paragraphs:
+                                    # 获取第一段
+                                    first_paragraph = text_frame.paragraphs[0]
+                                    
+                                    # 保存原始段落格式
+                                    original_alignment = first_paragraph.alignment if hasattr(first_paragraph, 'alignment') else None
+                                    
+                                    # 如果第一段有运行（runs），保存第一个运行的格式
+                                    original_font = None
+                                    if first_paragraph.runs:
+                                        first_run = first_paragraph.runs[0]
+                                        original_font = {
+                                            'name': first_run.font.name,
+                                            'size': first_run.font.size,
+                                            'bold': first_run.font.bold,
+                                            'italic': first_run.font.italic,
+                                            'color': first_run.font.color.rgb if hasattr(first_run.font.color, 'rgb') else None
+                                        }
+                                    
+                                    # 清除现有内容
+                                    text_frame.clear()
+                                    
+                                    # 添加新段落
+                                    new_paragraph = text_frame.paragraphs[0]
+                                    
+                                    # 恢复段落格式
+                                    if original_alignment is not None:
+                                        new_paragraph.alignment = original_alignment
+                                    
+                                    # 添加新文本运行
+                                    new_run = new_paragraph.add_run()
+                                    new_run.text = original_image_name
+                                    
+                                    # 恢复字体格式
+                                    if original_font:
+                                        if original_font['name']:
+                                            new_run.font.name = original_font['name']
+                                        if original_font['size']:
+                                            new_run.font.size = original_font['size']
+                                        if original_font['bold'] is not None:
+                                            new_run.font.bold = original_font['bold']
+                                        if original_font['italic'] is not None:
+                                            new_run.font.italic = original_font['italic']
+                                        if original_font['color']:
+                                            new_run.font.color.rgb = original_font['color']
+                                    
+                                    text_replacements_made += 1
+                                    print(f"    ✅ 成功更新文本框'{text_box_name}'（已保持格式）")
+                                    break
+                                elif hasattr(shape, 'text'):
+                                    print(f"    📝 正在替换文本形状'{text_box_name}'为'{original_image_name}'")
+                                    shape.text = original_image_name
+                                    text_replacements_made += 1
+                                    print(f"    ✅ 成功更新文本形状'{text_box_name}'")
+                                    break
+        
         # 保存演示文稿
         prs.save(pptx_path)
-        print(f"  💾 已保存演示文稿，共替换{replacements_made}个图片")
-        return replacements_made > 0
+        print(f"  💾 已保存演示文稿，共替换{replacements_made}个图片，{text_replacements_made}个文本")
+        return (replacements_made > 0) or (text_replacements_made > 0)
         
     except Exception as e:
         print(f"  ❌ 更新演示文稿时出错：{e}")
@@ -328,11 +418,15 @@ def process_folder(folder_path, template_pptx):
     
     # 从源图片创建3个尺寸的版本
     print("  🔧 正在生成不同尺寸的图片...")
-    sized_images, temp_dir = create_sized_images_from_source(image_file)
+    sized_images, (temp_dir, original_image_name) = create_sized_images_from_source(image_file)
     
     if sized_images is None:
         print(f"  ❌ 无法生成尺寸图片")
         return False
+        
+    # 存储原始图片名称，用于后续文本替换
+    if original_image_name:
+        print(f"  📝 原始图片名称：{original_image_name}")
     
     try:
         # 显示每个尺寸将替换的形状
@@ -346,7 +440,7 @@ def process_folder(folder_path, template_pptx):
         pptx_copy = copy_template_pptx(template_pptx, folder_path, folder_path.name)
         
         if pptx_copy:
-            success = replace_images_in_presentation(pptx_copy, sized_images)
+            success = replace_images_in_presentation(pptx_copy, sized_images, original_image_name)
             if success:
                 print(f"  🎉 成功处理文件夹：{folder_path.name}")
                 print(f"  📊 生成的尺寸数量：{len(sized_images)}")
