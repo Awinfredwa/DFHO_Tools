@@ -122,6 +122,88 @@ def has_existing_pptx(folder_path):
     pptx_files = list(folder_path.glob("*.pptx"))
     return len(pptx_files) > 0, pptx_files
 
+def create_sized_images_from_source(source_image_path, dpi=96):
+    """
+    从源图片创建多种尺寸版本（内存中处理，不保存到磁盘）
+    
+    返回:
+        tuple: (sized_images, original_image_name) 包含生成的图片字典和原始图片名称（不带扩展名）
+    """
+    cm_to_pixel = lambda cm: int(cm * dpi / 2.54)
+    
+    try:
+        # 提取原始图片名称（不带扩展名）
+        original_image_name = source_image_path.stem
+        
+        with Image.open(source_image_path) as original_image:
+            print(f"  📐 源图片尺寸：{original_image.size[0]}x{original_image.size[1]}像素")
+            
+            # 计算所有需要的最大尺寸
+            required_widths = [cm_to_pixel(w) for _, (w, h) in GENERATED_SIZES.items()]
+            required_heights = [cm_to_pixel(h) for _, (w, h) in GENERATED_SIZES.items()]
+            min_width_needed = max(required_widths)
+            min_height_needed = max(required_heights)
+            
+            current_width, current_height = original_image.size
+            
+            # 检查是否需要放大图片
+            if current_width < min_width_needed or current_height < min_height_needed:
+                # 计算需要的缩放比例（保持宽高比）
+                scale_x = min_width_needed / current_width
+                scale_y = min_height_needed / current_height
+                scale_factor = max(scale_x, scale_y)
+                
+                new_width = int(current_width * scale_factor)
+                new_height = int(current_height * scale_factor)
+                
+                print(f"  🔍 图片太小，正在放大...")
+                print(f"  📏 需要最小尺寸：{min_width_needed}x{min_height_needed}像素")
+                print(f"  ⬆️  放大到：{new_width}x{new_height}像素（缩放{scale_factor:.2f}倍）")
+                
+                # 使用高质量重采样放大图片
+                image = original_image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            else:
+                print(f"  ✅ 图片尺寸足够大")
+                image = original_image.copy()
+            
+            width, height = image.size
+            center_x, center_y = width // 2, height // 2
+            
+            # 创建临时文件夹存储处理后的图片
+            temp_dir = Path(tempfile.mkdtemp())
+            created_files = {}
+            
+            for size_name, (width_cm, height_cm) in GENERATED_SIZES.items():
+                crop_width = cm_to_pixel(width_cm)
+                crop_height = cm_to_pixel(height_cm)
+                
+                # 现在图片应该足够大了，但还是检查一下
+                if crop_width > width or crop_height > height:
+                    print(f"  ⚠️  意外错误：即使放大后，{size_name}仍然过大，跳过")
+                    continue
+                
+                # 从中心计算裁剪区域
+                left = center_x - crop_width // 2
+                top = center_y - crop_height // 2
+                right = left + crop_width
+                bottom = top + crop_height
+                
+                # 裁剪图片
+                cropped_image = image.crop((left, top, right, bottom))
+                
+                # 保存到临时文件
+                temp_file_path = temp_dir / f"{size_name}.png"
+                cropped_image.save(temp_file_path)
+                created_files[size_name] = temp_file_path
+                print(f"  ✅ 已创建{size_name}：{width_cm}x{height_cm}厘米")
+            
+            # 返回包含所有尺寸图片的字典和原始图片名称
+            return created_files, original_image_name
+            
+    except Exception as e:
+        print(f"  ❌ 从源图片创建尺寸版本时出错：{e}")
+        return None, None
+
 def copy_template_pptx(template_path, output_dir, folder_name):
     """创建模板PPTX的副本用于处理"""
     output_name = f"{folder_name}_presentation.pptx"
