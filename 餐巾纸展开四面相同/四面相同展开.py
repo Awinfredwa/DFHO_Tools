@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-四面相同展开图片处理脚本
-========================
+餐巾纸展开图片处理脚本
+====================
 
 此脚本自动完成以下任务：
 1. 从"原图"文件夹读取所有图片
-2. 将单张图片展开为完整的4倍大小餐巾纸（四面相同，无旋转）
+2. 将单张图片展开为完整的4倍大小餐巾纸（上面两个角旋转180度）
 3. 使用展开后的图片替换PowerPoint模板中的图片
 4. 将结果保存到"成果"文件夹中
 
 展开逻辑：
-- 左上角：原图复制
-- 右上角：原图复制  
+- 左上角：原图旋转180度
+- 右上角：原图旋转180度  
 - 左下角：原图复制
 - 右下角：原图复制
-（四个象限完全相同，无旋转）
+（上面两个象限旋转180度，下面两个象限保持原样）
 
 专为非技术用户设计 - 只需点击运行！
 """
@@ -37,7 +37,7 @@ TEMPLATE_FILE = "单页模板.pptx"
 # 图片到PowerPoint形状名称的映射
 # 每个PPTX文件将使用两张图片：原图和展开图
 IMAGE_SHAPE_MAPPING = {
-    "original": ["1"],      # 原图替换的形状名称列表
+    "original": ["1","3"],      # 原图替换的形状名称列表
     "unfolded": ["2"]       # 展开图替换的形状名称列表
 }
 
@@ -76,10 +76,10 @@ def find_images_in_folder(folder_path):
 
 def create_four_same_napkin(image_path, output_path):
     """
-    从单张图片创建完整的展开餐巾纸（四面相同）
+    从单张图片创建完整的展开餐巾纸（上面两个角旋转180度）
     逻辑：
-    - 左上角：原图复制
-    - 右上角：原图复制
+    - 左上角：原图旋转180度
+    - 右上角：原图旋转180度
     - 左下角：原图复制
     - 右下角：原图复制
     
@@ -105,20 +105,23 @@ def create_four_same_napkin(image_path, output_path):
             
             print(f"  🔧 创建展开画布：{new_width}x{new_height}像素")
             
-            # 四个象限都放置相同的原图
-            # 左上角
-            new_image.paste(original, (0, 0))
-            print(f"  📍 左上角：原图复制")
+            # 创建旋转180度的版本
+            rotated_image = original.rotate(180)
             
-            # 右上角
-            new_image.paste(original, (orig_width, 0))
-            print(f"  📍 右上角：原图复制")
+            # 四个象限：上面两个旋转180度，下面两个保持原样
+            # 左上角 - 旋转180度
+            new_image.paste(rotated_image, (0, 0))
+            print(f"  📍 左上角：原图旋转180度")
             
-            # 左下角
+            # 右上角 - 旋转180度
+            new_image.paste(rotated_image, (orig_width, 0))
+            print(f"  📍 右上角：原图旋转180度")
+            
+            # 左下角 - 原图复制
             new_image.paste(original, (0, orig_height))
             print(f"  📍 左下角：原图复制")
             
-            # 右下角
+            # 右下角 - 原图复制
             new_image.paste(original, (orig_width, orig_height))
             print(f"  📍 右下角：原图复制")
             
@@ -330,7 +333,7 @@ def process_image(image_path, template_path, output_folder):
     temp_image_path = output_folder / temp_image_name
     
     # 创建展开的餐巾纸图片
-    print(f"  🔧 正在展开餐巾纸（四面相同）...")
+    print(f"  🔧 正在展开餐巾纸（上面两角旋转180度）...")
     success = create_four_same_napkin(image_path, temp_image_path)
     
     if not success:
@@ -378,10 +381,10 @@ def main():
         template_path = working_dir / TEMPLATE_FILE
         
         print_separator()
-        print("🧾 四面相同餐巾纸展开处理器")
+        print("🧾 餐巾纸展开处理器")
         print_separator()
         print("此脚本将自动处理输入文件夹中的所有图片，")
-        print("并将图片展开为完整的4倍大小餐巾纸图案（四面相同），")
+        print("并将图片展开为完整的4倍大小餐巾纸图案（上面两个角旋转180度），")
         print("然后生成对应的PowerPoint演示文稿。")
         print(f"工作目录：{working_dir}")
         print(f"输入文件夹：{INPUT_FOLDER}")
@@ -389,10 +392,10 @@ def main():
         print(f"模板文件：{TEMPLATE_FILE}")
         print()
         print("📋 展开模式说明：")
-        print("  四面相同展开逻辑：")
+        print("  上面旋转180度展开逻辑：")
         print("    ┌─────────┬─────────┐")
         print("    │ 左上角  │ 右上角  │")
-        print("    │ 原图复制 │ 原图复制 │")
+        print("    │旋转180度│旋转180度│")
         print("    ├─────────┼─────────┤")
         print("    │ 左下角  │ 右下角  │")
         print("    │ 原图复制 │ 原图复制 │")
@@ -496,9 +499,9 @@ def main():
             print("  📋 PowerPoint演示文稿：[原文件名].pptx")
             print()
             print("📝 说明：")
-            print("   每个PPTX文件包含原始图片和对应的四面相同展开版本")
+            print("   每个PPTX文件包含原始图片和对应的展开版本")
             print("   根据映射配置替换PowerPoint模板中的不同形状")
-            print("   四个象限完全相同，适用于对称设计需求")
+            print("   上面两个象限旋转180度，下面两个象限保持原样")
             if skipped > 0:
                 print(f"\n⏭️  跳过了{skipped}个已存在的文件以避免重复处理")
         else:
