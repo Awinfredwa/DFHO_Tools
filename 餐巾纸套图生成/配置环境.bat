@@ -1,22 +1,26 @@
 @echo off
-chcp 65001 >nul
-title 配置环境 - 餐巾纸套图生成工具
+setlocal
+cd /d "%~dp0"
+title Setup
 
 echo.
-echo ====================================================
-echo    配置环境 - 餐巾纸套图生成工具
-echo ====================================================
-echo.
-echo 正在安装必需的 Python 包...
+echo Installing required Python packages...
 echo.
 
-pip install Pillow
+python -m pip install -r requirements.txt
+if errorlevel 1 goto install_failed
 
 echo.
-echo ====================================================
-echo    配置完成！
-echo ====================================================
+echo    Setup complete
 echo.
-echo 现在可以双击 "运行工具.bat" 生成套图。
+echo You can now run the tool.
 echo.
 pause
+exit /b 0
+
+:install_failed
+echo.
+echo Setup failed. Please make sure Python is installed.
+echo.
+pause
+exit /b 1
