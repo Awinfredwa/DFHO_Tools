@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageOps, ImageStat
 
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
@@ -57,8 +57,9 @@ DETAIL_BACKGROUND_CROP = (0, 640, 3072, 3072)
 DETAIL_CIRCLE_BACKGROUND_COLOR = (224, 229, 236)
 DETAIL_TEXTURE_TEMPLATE = "2.jpg"
 DETAIL_TEXTURE_SOURCE_BOX = (700, 703, 2373, 2370)
-DETAIL_RECT_OPACITY = 0.92
-DETAIL_RECT_TEXTURE = 0.7
+DETAIL_RECT_OPACITY = 1
+DETAIL_RECT_TEXTURE = 0.88
+DETAIL_RECT_TEXTURE_CONTRAST = 1.45
 DETAIL_INSET_RECTS = (
     ((450, 1020, 2010, 2580), -10),
     ((530, 1100, 2090, 2660), 0.0),
@@ -129,14 +130,35 @@ def resize_to_cover(image: Image.Image, size: tuple[int, int]) -> Image.Image:
     return resized.crop((left, top, left + size[0], top + size[1]))
 
 
-def paper_blend(base_crop: Image.Image, art: Image.Image, opacity: float, texture: float) -> Image.Image:
+def clamp_blend_amount(value: float) -> float:
+    return max(0.0, min(value, 1.0))
+
+
+def match_luminance(image: Image.Image, reference: Image.Image) -> Image.Image:
+    current = ImageStat.Stat(image.convert("L")).mean[0]
+    if current <= 0:
+        return image
+
+    target = ImageStat.Stat(reference.convert("L")).mean[0]
+    return ImageEnhance.Brightness(image).enhance(target / current)
+
+
+def paper_blend(
+    base_crop: Image.Image,
+    art: Image.Image,
+    opacity: float,
+    texture: float,
+    preserve_art_luminance: bool = False,
+) -> Image.Image:
     """Keep napkin paper texture while replacing artwork."""
     base_crop = base_crop.convert("RGB")
     art = ImageEnhance.Contrast(art).enhance(1.04)
     art = ImageEnhance.Color(art).enhance(1.03)
     textured = ImageChops.multiply(art, base_crop)
-    textured = Image.blend(art, textured, texture)
-    return Image.blend(base_crop, textured, opacity)
+    textured = Image.blend(art, textured, clamp_blend_amount(texture))
+    if preserve_art_luminance:
+        textured = match_luminance(textured, art)
+    return Image.blend(base_crop, textured, clamp_blend_amount(opacity))
 
 
 def apply_placement(canvas: Image.Image, source_image: Image.Image, placement: Placement) -> None:
@@ -191,6 +213,11 @@ def detail_texture_source(texture_template: Image.Image) -> Image.Image:
     return ImageOps.exif_transpose(texture_template).convert("RGB").crop(DETAIL_TEXTURE_SOURCE_BOX)
 
 
+def enhance_detail_texture(texture: Image.Image) -> Image.Image:
+    enhanced = ImageEnhance.Contrast(texture).enhance(DETAIL_RECT_TEXTURE_CONTRAST)
+    return match_luminance(enhanced, texture)
+
+
 def textured_detail_art(
     folded: Image.Image,
     texture_source: Image.Image | None,
@@ -200,8 +227,14 @@ def textured_detail_art(
     if texture_source is None:
         return art.convert("RGBA")
 
-    texture = resize_to_cover(texture_source, size)
-    return paper_blend(texture, art, DETAIL_RECT_OPACITY, DETAIL_RECT_TEXTURE).convert("RGBA")
+    texture = enhance_detail_texture(resize_to_cover(texture_source, size))
+    return paper_blend(
+        texture,
+        art,
+        DETAIL_RECT_OPACITY,
+        DETAIL_RECT_TEXTURE,
+        preserve_art_luminance=True,
+    ).convert("RGBA")
 
 
 def paste_circle_rects(
